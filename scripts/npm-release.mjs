@@ -6,7 +6,7 @@ import { argv, env } from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import process from 'node:process';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = env.CAIRUL_RELEASE_SOURCE ? resolve(env.CAIRUL_RELEASE_SOURCE) : fileURLToPath(new URL('../', import.meta.url));
 const registry = 'https://registry.npmjs.org';
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const validName = /^@cairul\/[a-z0-9-]+$/;
@@ -63,6 +63,19 @@ function inDependencyOrder(packages) {
   return ordered;
 }
 
+function prepareRepositoryMetadata(path, pkg) {
+  const repository = env.CAIRUL_RELEASE_REPOSITORY;
+  if (!repository) return;
+  const url = 'git+https://github.com/' + repository + '.git';
+  if (pkg.repository) {
+    if (pkg.repository.url !== url) throw new Error('The package repository does not match ' + repository + '.');
+    return;
+  }
+  const metadata = { type: 'git', url, ...(path === '.' ? {} : { directory: path }) };
+  writeFileSync(join(root, path, 'package.json'), JSON.stringify({ ...pkg, repository: metadata }, null, 2) + '\n');
+  log('Added GitHub repository metadata to the archive for ' + pkg.name + '.');
+}
+
 function pack(directory, all) {
   const catalog = checkCatalog();
   const tags = all
@@ -76,6 +89,7 @@ function pack(directory, all) {
   mkdirSync(directory, { recursive: true });
   const workspace = new Map(catalog.map(({ name, version }) => [name, version]));
   const archives = inDependencyOrder(released).map(({ path, name, version, package: pkg }) => {
+    prepareRepositoryMetadata(path, pkg);
     const output = execFileSync(
       'pnpm',
       ['--dir', join(root, path), 'pack', '--pack-destination', directory, '--json'],
@@ -98,7 +112,6 @@ function pack(directory, all) {
 }
 
 function publish(directory) {
-  if (!env.NODE_AUTH_TOKEN) throw new Error('Set the NPM_TOKEN GitHub Actions secret.');
   const access = env.NPM_ACCESS ?? 'public';
   if (!['public', 'restricted'].includes(access)) throw new Error('Set NPM_ACCESS to public or restricted.');
   const archives = readJson(join(directory, 'packages.json'));
